@@ -12,7 +12,7 @@ for var in $(env | grep -i CLAUDE | cut -d= -f1); do
   unset "$var"
 done
 
-SESSION="claude-terminal"
+SESSION="claude-terminal-4"
 
 # If tmux session exists, attach to it; otherwise create it
 if tmux has-session -t "$SESSION" 2>/dev/null; then

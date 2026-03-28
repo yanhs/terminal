@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agents — yanhs.stream</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      height: 100vh;
+      overflow: hidden;
+      background: #09090b;
+      color: #e4e4e7;
+      font-family: 'Inter', -apple-system, system-ui, sans-serif;
+      display: flex;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── Left sidebar ── */
+    .sidebar {
+      width: 280px;
+      min-width: 280px;
+      height: 100vh;
+      background: #0c0c0f;
+      border-right: 1px solid rgba(255,255,255,0.06);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .sidebar-header {
+      padding: 1.1rem 1.2rem;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+    }
+
+    .sidebar-header h1 {
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: #fafafa;
+      letter-spacing: -0.02em;
+    }
+
+    .sidebar-header .logo {
+      font-size: 1rem;
+      opacity: 0.7;
+    }
+
+    .agent-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0.5rem;
+    }
+
+    .agent-card {
+      padding: 0.85rem 0.9rem;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.15s;
+      margin-bottom: 2px;
+      border: 1px solid transparent;
+      user-select: none;
+    }
+
+    .agent-card:hover {
+      background: rgba(255,255,255,0.03);
+    }
+
+    .agent-card.selected {
+      background: rgba(99,102,241,0.08);
+      border-color: rgba(99,102,241,0.2);
+    }
+
+    .agent-top {
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+      margin-bottom: 0.35rem;
+    }
+
+    .agent-num {
+      width: 26px;
+      height: 26px;
+      border-radius: 6px;
+      background: rgba(255,255,255,0.05);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: #a1a1aa;
+      flex-shrink: 0;
+    }
+
+    .agent-card.selected .agent-num {
+      background: rgba(99,102,241,0.15);
+      color: #818cf8;
+    }
+
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      background: #3f3f46;
+      transition: all 0.3s;
+    }
+
+    .status-dot.working {
+      background: #fbbf24;
+      box-shadow: 0 0 6px rgba(251,191,36,0.5);
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    .status-dot.idle {
+      background: #4ade80;
+      box-shadow: 0 0 5px rgba(74,222,128,0.3);
+    }
+
+    .status-dot.offline { background: #52525b; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .status-text {
+      font-size: 0.6rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .status-text.working { color: #fbbf24; }
+    .status-text.idle { color: #4ade80; }
+    .status-text.offline { color: #52525b; }
+
+    .agent-project {
+      font-size: 0.8rem;
+      font-weight: 500;
+      color: #d4d4d8;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      min-height: 1.2em;
+    }
+
+    .agent-task {
+      font-size: 0.7rem;
+      color: #71717a;
+      line-height: 1.4;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      min-height: 1em;
+    }
+
+    .agent-project.empty, .agent-task.empty {
+      color: #2a2a2e;
+      font-style: italic;
+    }
+
+    /* ── Right area ── */
+    .main {
+      flex: 1;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      background: #09090b;
+    }
+
+    .terminal-bar {
+      padding: 0.5rem 1rem;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      display: flex;
+      align-items: center;
+      gap: 0.7rem;
+      background: #0c0c0f;
+      flex-shrink: 0;
+    }
+
+    .bar-num {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: #818cf8;
+    }
+
+    .bar-field {
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 5px;
+      padding: 0.3rem 0.6rem;
+      font-family: inherit;
+      font-size: 0.75rem;
+      color: #d4d4d8;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    .bar-field:focus {
+      border-color: rgba(99,102,241,0.4);
+    }
+
+    .bar-field.project {
+      width: 160px;
+      font-weight: 500;
+    }
+
+    .bar-field.task {
+      flex: 1;
+      min-width: 100px;
+    }
+
+    .bar-field::placeholder { color: #3f3f46; }
+
+    .open-tab-btn {
+      padding: 0.3rem 0.7rem;
+      font-size: 0.7rem;
+      font-weight: 500;
+      color: #71717a;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 5px;
+      cursor: pointer;
+      text-decoration: none;
+      transition: all 0.15s;
+      flex-shrink: 0;
+    }
+
+    .open-tab-btn:hover {
+      color: #a1a1aa;
+      border-color: rgba(255,255,255,0.15);
+      background: rgba(255,255,255,0.06);
+    }
+
+    .terminal-wrap {
+      flex: 1;
+      position: relative;
+    }
+
+    .terminal-wrap iframe {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%;
+      height: 100%;
+      border: none;
+      background: #000;
+    }
+
+    .terminal-placeholder {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #3f3f46;
+      font-size: 0.85rem;
+    }
+
+    /* ── Scrollbar ── */
+    .agent-list::-webkit-scrollbar { width: 4px; }
+    .agent-list::-webkit-scrollbar-track { background: transparent; }
+    .agent-list::-webkit-scrollbar-thumb { background: #27272a; border-radius: 2px; }
+
+    /* ── Mobile ── */
+    @media (max-width: 700px) {
+      body { flex-direction: column; }
+      .sidebar { width: 100%; min-width: 100%; height: auto; max-height: 35vh; border-right: none; border-bottom: 1px solid rgba(255,255,255,0.06); }
+      .main { height: 65vh; }
+      .bar-field.project { width: 100px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="sidebar">
+    <div class="sidebar-header">
+      <span class="logo">&#9654;</span>
+      <h1>Agents</h1>
+    </div>
+    <div class="agent-list" id="agentList"></div>
+  </div>
+
+  <div class="main">
+    <div class="terminal-bar" id="terminalBar" style="display:none">
+      <span class="bar-num" id="barNum"></span>
+      <input class="bar-field project" id="barProject" placeholder="project name..." />
+      <input class="bar-field task" id="barTask" placeholder="current task..." />
+      <a class="open-tab-btn" id="openTabBtn" href="#" target="_blank">Open in tab</a>
+    </div>
+    <div class="terminal-wrap" id="terminalWrap">
+      <div class="terminal-placeholder" id="placeholder">Select an agent</div>
+    </div>
+  </div>
+
+  <script>
+    const AGENT_IDS = ['1','2','3','4','5','6'];
+    let selected = null;
+    let agentsData = {};
+    let saveTimer = null;
+
+    // ── Build sidebar cards (once) ──
+    const list = document.getElementById('agentList');
+    AGENT_IDS.forEach(id => {
+      const card = document.createElement('div');
+      card.className = 'agent-card';
+      card.id = 'agent-' + id;
+      card.addEventListener('click', () => selectAgent(id));
+      card.innerHTML = `
+        <div class="agent-top">
+          <div class="agent-num">${id}</div>
+          <div class="status-dot" id="dot-${id}"></div>
+          <div class="status-text" id="stxt-${id}"></div>
+        </div>
+        <div class="agent-project empty" id="proj-${id}">no project</div>
+        <div class="agent-task empty" id="task-${id}">no task</div>
+      `;
+      list.appendChild(card);
+    });
+
+    // ── Top-bar edit fields ──
+    const barProject = document.getElementById('barProject');
+    const barTask = document.getElementById('barTask');
+
+    function onBarInput() {
+      if (!selected) return;
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => saveAgent(selected), 600);
+      // Update sidebar card instantly
+      updateCardText(selected, barProject.value, barTask.value);
+    }
+
+    barProject.addEventListener('input', onBarInput);
+    barTask.addEventListener('input', onBarInput);
+
+    function saveAgent(id) {
+      fetch('/api/terminal-status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id,
+          project: barProject.value.trim(),
+          task: barTask.value.trim(),
+        }),
+      }).catch(() => {});
+    }
+
+    function updateCardText(id, project, task) {
+      const p = document.getElementById('proj-' + id);
+      const t = document.getElementById('task-' + id);
+      p.textContent = project || 'no project';
+      p.classList.toggle('empty', !project);
+      t.textContent = task || 'no task';
+      t.classList.toggle('empty', !task);
+    }
+
+    // ── Select agent ──
+    function selectAgent(id) {
+      // Save current agent before switching
+      if (selected && selected !== id) {
+        saveAgent(selected);
+      }
+
+      selected = id;
+      const info = agentsData[id] || {};
+
+      // Highlight card
+      AGENT_IDS.forEach(i => {
+        document.getElementById('agent-' + i).classList.toggle('selected', i === id);
+      });
+
+      // Fill top bar
+      document.getElementById('terminalBar').style.display = 'flex';
+      document.getElementById('barNum').textContent = '#' + id;
+      barProject.value = info.project || '';
+      barTask.value = info.task || '';
+
+      const termPath = '/' + (info.path || 'terminal');
+      document.getElementById('openTabBtn').href = termPath;
+
+      // Replace iframe completely (avoids beforeunload confirmation)
+      const wrap = document.getElementById('terminalWrap');
+      const ph = document.getElementById('placeholder');
+      if (ph) ph.remove();
+
+      const oldFrame = wrap.querySelector('iframe');
+      if (oldFrame) oldFrame.remove();
+
+      const frame = document.createElement('iframe');
+      frame.src = termPath;
+      wrap.appendChild(frame);
+    }
+
+    // ── Poll status ──
+    function updateStatuses(data) {
+      agentsData = data;
+      AGENT_IDS.forEach(id => {
+        const info = data[id] || {};
+        const dot = document.getElementById('dot-' + id);
+        const stxt = document.getElementById('stxt-' + id);
+
+        if (!info.active) {
+          dot.className = 'status-dot offline';
+          stxt.className = 'status-text offline';
+          stxt.textContent = 'offline';
+        } else if (info.working) {
+          dot.className = 'status-dot working';
+          stxt.className = 'status-text working';
+          stxt.textContent = 'working';
+        } else {
+          dot.className = 'status-dot idle';
+          stxt.className = 'status-text idle';
+          stxt.textContent = 'idle';
+        }
+
+        // Update card text (but not the top-bar fields for the selected agent)
+        if (id !== selected) {
+          updateCardText(id, info.project, info.task);
+        }
+
+        // Sync top bar if this is selected and user isn't editing
+        if (id === selected
+            && document.activeElement !== barProject
+            && document.activeElement !== barTask) {
+          barProject.value = info.project || '';
+          barTask.value = info.task || '';
+        }
+      });
+    }
+
+    async function poll() {
+      try {
+        const res = await fetch('/api/terminal-status');
+        updateStatuses(await res.json());
+      } catch {}
+    }
+
+    poll();
+    setInterval(poll, 4000);
+  </script>
+</body>
+</html>
