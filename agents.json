@@ -1,11 +1,11 @@
 {
   "1": {
-    "project": "IanProg",
+    "project": "spark",
     "task": "",
     "locked": true
   },
   "2": {
-    "project": "Orchestra",
+    "project": "reimake",
     "task": "",
     "locked": true
   },
@@ -15,30 +15,44 @@
     "locked": true
   },
   "4": {
-    "project": "CleanSlate",
+    "project": "skills",
     "task": "",
     "locked": true
   },
   "5": {
-    "project": "Terminal",
+    "project": "orchestra",
     "task": "",
     "locked": true
   },
   "6": {
-    "project": "CleanSlate",
+    "project": "Appeals",
     "task": "",
-    "locked": false
+    "locked": true
   },
   "7": {
-    "project": "OpenOrchestra",
+    "project": "kolobok",
     "locked": true
   },
   "9": {
-    "project": "OpenOrchestra",
+    "project": "",
     "locked": true
   },
   "10": {
     "project": "",
     "locked": true
-  }
+  },
+  "8": {
+    "project": "Stocks",
+    "locked": true
+  },
+  "_order": [
+    "6",
+    "5",
+    "1",
+    "7",
+    "4",
+    "3",
+    "8",
+    "2"
+  ]
 }

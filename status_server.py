@@ -232,41 +232,19 @@ def parse_pane(session):
                 low = name.lower().replace(" ", "-")
                 project = PROJECT_MAP.get(low, name)
 
-    # Find last meaningful line (bottom-up), skip all noise
+    # Find last user prompt (line starting with ❯)
     for line in reversed(lines):
         clean = strip_ansi(line).strip()
         if not clean:
             continue
-        # Skip if line is ONLY box-drawing, whitespace, or block chars
-        if not re.search(r'[a-zA-Z\u0400-\u04FF\u4e00-\u9fff0-9]', clean):
-            continue
-        # Skip Claude UI chrome
-        if any(k in clean.lower() for k in (
-            "bypass permissions", "shift+tab", "esc to interrupt",
-            "ctrl+t to", "ctrl+c to",
-        )):
-            continue
-        # Skip bare prompt
-        if clean in ("\u276f", "❯", ">", "$"):
-            continue
-        # Skip Claude Code splash/animation (starts with block drawing chars)
-        if re.match(r'^[▘▝▖▗▀▄█▌▐▛▜▙▟░▒▓▐]', clean):
-            continue
-        # Skip rating prompt like "1: Bad   2: Fine"
-        if re.match(r'^\d+:\s*\w+\s+\d+:\s*\w+', clean):
-            continue
-        # Skip separator lines (with or without embedded project name)
-        stripped_dashes = re.sub(r'[─━═\s]', '', clean)
-        if not stripped_dashes or (
-            len(stripped_dashes) < len(clean) * 0.3
-            and re.match(r'^[─━═]', clean)
-        ):
-            continue
-        # Got meaningful content
-        if len(clean) > 100:
-            clean = clean[:97] + "..."
-        task = clean
-        break
+        # Match prompt line: ❯ <user text>
+        if clean.startswith("\u276f") or clean.startswith("❯"):
+            prompt_text = clean.lstrip("❯\u276f ").strip()
+            if prompt_text and len(prompt_text) > 1:
+                if len(prompt_text) > 100:
+                    prompt_text = prompt_text[:97] + "..."
+                task = prompt_text
+                break
 
     return project, task
 
@@ -369,11 +347,22 @@ class Handler(BaseHTTPRequestHandler):
             }
 
         result["_system"] = get_system_stats()
+        if "_order" in agents_meta:
+            result["_order"] = agents_meta["_order"]
         self._json_response(200, result)
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
         body = json.loads(self.rfile.read(length))
+
+        # Order sync
+        if "_order" in body:
+            agents = load_agents()
+            agents["_order"] = body["_order"]
+            save_agents(agents)
+            self._json_response(200, {"ok": True})
+            return
+
         agent_id = str(body.get("id", ""))
         if agent_id not in {t["id"] for t in SESSIONS}:
             self._json_response(400, {"error": "invalid id"})
@@ -392,10 +381,48 @@ class Handler(BaseHTTPRequestHandler):
         save_agents(agents)
         self._json_response(200, {"ok": True})
 
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+
     def _json_response(self, code, data):
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Cache-Control", "no-cache")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(json.dumps(data, ensure_ascii=False).encode())
+
+    def log_message(self, *args):
+        pass
+
+
+class BufferHandler(BaseHTTPRequestHandler):
+    """GET /  — return tmux paste buffer for a session."""
+    def do_GET(self):
+        from urllib.parse import urlparse, parse_qs
+        qs = parse_qs(urlparse(self.path).query)
+        session = qs.get("session", [""])[0]
+        if not session or not re.match(r'^[\w-]+$', session):
+            self._resp(400, {"error": "bad session"})
+            return
+        r = subprocess.run(
+            ["tmux", "show-buffer", "-t", session],
+            capture_output=True, text=True,
+        )
+        if r.returncode != 0:
+            # try without -t (global buffer)
+            r = subprocess.run(["tmux", "show-buffer"], capture_output=True, text=True)
+        self._resp(200, {"text": r.stdout if r.returncode == 0 else ""})
+
+    def _resp(self, code, data):
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(json.dumps(data, ensure_ascii=False).encode())
 
@@ -427,4 +454,5 @@ class LiveHandler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     from threading import Thread
     Thread(target=lambda: HTTPServer(("127.0.0.1", 3014), LiveHandler).serve_forever(), daemon=True).start()
+    Thread(target=lambda: HTTPServer(("127.0.0.1", 3045), BufferHandler).serve_forever(), daemon=True).start()
     HTTPServer(("127.0.0.1", 3011), Handler).serve_forever()
