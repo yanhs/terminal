@@ -116,6 +116,17 @@ let agents read/write your project, mount it at `/work` (uncomment the line in `
 > **No agent list to edit by hand** — agents are added, removed and renamed in the dashboard
 > itself (the **+ Claude** button), which writes `agents.json` for you.
 
+**One command** — with [`caddy`](https://caddyserver.com/download) on your `PATH` (a single
+binary, no sudo), `./start.sh` brings up the whole stack (`status_server` + a ttyd per agent
++ a local proxy) on **http://localhost:8080**:
+
+```bash
+git clone https://github.com/yanhs/agentdeck.git && cd agentdeck
+./start.sh
+```
+
+Or run the pieces yourself:
+
 ```bash
 git clone https://github.com/yanhs/agentdeck.git
 cd agentdeck

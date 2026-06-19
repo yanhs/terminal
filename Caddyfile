@@ -1,0 +1,59 @@
+# Local reverse proxy for `./start.sh` (no Docker, no sudo). Mirrors the routing in
+# nginx/agents-subdomain.conf: /api/* strip the prefix (status_server serves at /),
+# /terminalN keep it (ttyd runs with --base-path /terminalN). Caddy upgrades WebSockets
+# automatically. For remote/HTTPS + a login gate, use nginx/agents-subdomain.conf instead.
+{
+	admin off
+}
+
+:{$PORT_HTTP:8080} {
+	root * web
+
+	handle_path /api/terminal-status* {
+		reverse_proxy 127.0.0.1:3011
+	}
+	handle_path /api/tmux-buffer/* {
+		reverse_proxy 127.0.0.1:3045
+	}
+	handle_path /api/page-version* {
+		reverse_proxy 127.0.0.1:3014
+	}
+	handle_path /api/paste-image* {
+		reverse_proxy 127.0.0.1:3047
+	}
+	handle /login* {
+		reverse_proxy 127.0.0.1:3046
+	}
+	handle /logout* {
+		reverse_proxy 127.0.0.1:3046
+	}
+
+	handle /terminal* {
+		reverse_proxy 127.0.0.1:3005
+	}
+	handle /terminal2* {
+		reverse_proxy 127.0.0.1:3006
+	}
+	handle /terminal3* {
+		reverse_proxy 127.0.0.1:3008
+	}
+	handle /terminal4* {
+		reverse_proxy 127.0.0.1:3009
+	}
+	handle /terminal5* {
+		reverse_proxy 127.0.0.1:3012
+	}
+	handle /terminal6* {
+		reverse_proxy 127.0.0.1:3013
+	}
+	handle /terminal7* {
+		reverse_proxy 127.0.0.1:3015
+	}
+	handle /terminal8* {
+		reverse_proxy 127.0.0.1:3016
+	}
+
+	handle {
+		file_server
+	}
+}
