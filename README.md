@@ -127,7 +127,7 @@ read/write your project, mount it at `/work` (uncomment the line in `docker-comp
 
 **One command** — with [`caddy`](https://caddyserver.com/download) on your `PATH` (a single
 binary, no sudo), set a password and run `./start.sh` — it serves the whole stack behind a
-login on **http://localhost:8080** (set `AGENTDECK_SITE` to a domain for HTTPS):
+login on **http://localhost:8765** (change the port — or set a domain for HTTPS — via `AGENTDECK_SITE`):
 
 ```bash
 git clone https://github.com/yanhs/agentdeck.git && cd agentdeck

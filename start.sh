@@ -8,7 +8,7 @@
 #   echo 'AGENTDECK_PASSWORD=your-secret' >> .env     (or: export AGENTDECK_PASSWORD=...)
 # Optional:
 #   AGENTDECK_USER   the login name (default: admin)
-#   AGENTDECK_SITE   your domain -> automatic HTTPS (default ":8080", plain http/local)
+#   AGENTDECK_SITE   ":<port>" (default ":8765") or your domain -> automatic HTTPS
 #
 # Needs: python3, tmux, ttyd, the `claude` CLI, and `caddy`.
 set -uo pipefail
@@ -45,6 +45,6 @@ for id in 1 2 3 4 5 6 7 8; do
   ttyd -W -i lo -p "${PORT[$id]}" --base-path "$base" "bash ./$script" & pids+=($!)
 done
 
-echo "[agentdeck] caddy (login: ${AGENTDECK_USER}) -> ${AGENTDECK_SITE:-:8080}"
+echo "[agentdeck] caddy (login: ${AGENTDECK_USER}) -> ${AGENTDECK_SITE:-:8765}"
 caddy run --config Caddyfile --adapter caddyfile & pids+=($!)
 wait

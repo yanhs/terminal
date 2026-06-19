@@ -6,7 +6,7 @@
 	email {$AGENTDECK_EMAIL:you@example.com}
 }
 
-{$AGENTDECK_SITE::8080} {
+{$AGENTDECK_SITE::8765} {
 	basic_auth {
 		{$AGENTDECK_USER:admin} {$AGENTDECK_PASS_HASH}
 	}
