@@ -127,10 +127,10 @@ cp .env.example .env
 #    (status, auth/login, tmux-buffer, page-version, paste-image)
 python3 status_server.py &
 
-# 3) one ttyd web terminal per agent, on the ports the nginx vhost expects
-ttyd -p 3005 ./launch-claude.sh        # agent #1  -> /terminal
-ttyd -p 3006 ./launch-claude-2.sh      # agent #2  -> /terminal2
-# ...one per agent (full port map in nginx/agents-subdomain.conf)
+# 3) one ttyd web terminal per agent — --base-path must match its /terminalN route
+ttyd -W -i lo -p 3005 --base-path /terminal  ./launch-claude.sh    # agent #1
+ttyd -W -i lo -p 3006 --base-path /terminal2 ./launch-claude-2.sh  # agent #2
+# ...one per agent (full port + base-path map in nginx/agents-subdomain.conf)
 
 # 4) put nginx in front — TLS + the cookie login gate + one origin.
 #    Browser terminals are WebSockets, so a reverse proxy is required.
