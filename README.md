@@ -87,16 +87,25 @@ The dashboard is responsive — here's an agent's terminal running on a phone:
 
 ## 🐳 Quick start (Docker — one command)
 
-The fastest way — you only need **Docker** and your **Claude login**:
+Built for an internet-facing VPS — a **login** and **automatic HTTPS** out of the box. You
+only need **Docker** and your **Claude login**.
 
 ```bash
 git clone https://github.com/yanhs/agentdeck.git && cd agentdeck
-docker compose up          # builds + starts everything → open http://localhost:8080
+
+# the dashboard exposes live terminals, so set a password (and a domain for HTTPS):
+cat >> .env <<'EOF'
+AGENTDECK_PASSWORD=change-me
+AGENTDECK_SITE=agents.example.com    # your domain → auto-HTTPS, or ":80" for plain http
+AGENTDECK_EMAIL=you@example.com
+EOF
+
+docker compose up -d                 # → https://agents.example.com  (log in with the password)
 ```
 
-`docker-compose.yml` mounts your `~/.claude` so the agents can sign in (run `claude` once on
-the host first to log in). Then add agents with the **+ Claude** button in the dashboard. To
-let agents read/write your project, mount it at `/work` (uncomment the line in `docker-compose.yml`).
+Point the domain's DNS at the VPS first so Caddy can fetch a TLS certificate. Your `~/.claude`
+is mounted so the agents authenticate; add agents with the **+ Claude** button. To let agents
+read/write your project, mount it at `/work` (uncomment the line in `docker-compose.yml`).
 
 ## ✅ Requirements (for the manual setup)
 
@@ -117,11 +126,12 @@ let agents read/write your project, mount it at `/work` (uncomment the line in `
 > itself (the **+ Claude** button), which writes `agents.json` for you.
 
 **One command** — with [`caddy`](https://caddyserver.com/download) on your `PATH` (a single
-binary, no sudo), `./start.sh` brings up the whole stack (`status_server` + a ttyd per agent
-+ a local proxy) on **http://localhost:8080**:
+binary, no sudo), set a password and run `./start.sh` — it serves the whole stack behind a
+login on **http://localhost:8080** (set `AGENTDECK_SITE` to a domain for HTTPS):
 
 ```bash
 git clone https://github.com/yanhs/agentdeck.git && cd agentdeck
+echo 'AGENTDECK_PASSWORD=change-me' >> .env
 ./start.sh
 ```
 

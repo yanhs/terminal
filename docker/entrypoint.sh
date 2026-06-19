@@ -1,10 +1,19 @@
 #!/usr/bin/env bash
-# Start the whole AgentDeck stack inside the container: the status/auth backend
-# (one process, all API ports) + a ttyd web terminal per agent + nginx in front.
+# Start the AgentDeck stack inside the container: backend (status_server, all API
+# ports) + a ttyd terminal per agent + Caddy (login + automatic HTTPS) in front.
 set -uo pipefail
 cd /app
 
-echo "[agentdeck] backend: status_server.py (status/auth/buffer/page-version/paste)"
+if [ -z "${AGENTDECK_PASSWORD:-}" ]; then
+  echo "[agentdeck] ERROR: AGENTDECK_PASSWORD is not set — refusing to start an open dashboard." >&2
+  echo "            Set it in .env / docker-compose.yml (the dashboard exposes live terminals)." >&2
+  exit 1
+fi
+export AGENTDECK_USER="${AGENTDECK_USER:-admin}"
+export AGENTDECK_PASS_HASH="$(caddy hash-password --plaintext "$AGENTDECK_PASSWORD")"
+echo "[agentdeck] login user: ${AGENTDECK_USER}"
+
+echo "[agentdeck] backend: status_server.py"
 python3 status_server.py &
 sleep 1
 
@@ -14,10 +23,8 @@ for id in 1 2 3 4 5 6 7 8; do
   [ -f "$script" ] || continue
   base="/terminal"; [ "$id" != "1" ] && base="/terminal$id"
   echo "[agentdeck] ttyd :${PORT[$id]} ($base) -> $script"
-  # --base-path lets ttyd serve at /terminalN (matches the nginx route, no path strip);
-  # -i lo keeps it on loopback (nginx in this container reaches it).
   ttyd -W -i lo -p "${PORT[$id]}" --base-path "$base" "bash ./$script" &
 done
 
-echo "[agentdeck] nginx :80  ->  open http://localhost:8080"
-exec nginx -g 'daemon off;'
+echo "[agentdeck] caddy -> ${AGENTDECK_SITE:-:80}  (automatic HTTPS if it's a domain)"
+exec caddy run --config /app/docker/Caddyfile --adapter caddyfile

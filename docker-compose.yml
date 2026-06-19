@@ -3,17 +3,27 @@ services:
     build: .
     container_name: agentdeck
     ports:
-      # tip: use "127.0.0.1:8080:80" to keep it local-only (Docker publishes past ufw).
-      - "8080:80"             # open http://localhost:8080
+      - "80:80"
+      - "443:443"
+    environment:
+      # REQUIRED — the dashboard login (it exposes live agent terminals):
+      AGENTDECK_PASSWORD: "${AGENTDECK_PASSWORD:?set a dashboard password in .env}"
+      AGENTDECK_USER: "${AGENTDECK_USER:-admin}"
+      # Your domain -> automatic HTTPS (point its DNS at this VPS first).
+      # Leave ":80" for plain http with no certificate.
+      AGENTDECK_SITE: "${AGENTDECK_SITE:-:80}"
+      AGENTDECK_EMAIL: "${AGENTDECK_EMAIL:-you@example.com}"
     volumes:
-      # Your Claude login — REQUIRED so the agents can authenticate.
-      # Run `claude` once on the host first to create ~/.claude, then:
+      # your Claude login — REQUIRED so the agents can authenticate
       - ${HOME}/.claude:/root/.claude
-      # Keep agent conversations resumable across container restarts.
+      # keep agent conversations resumable across restarts
       - agentdeck-sessions:/app/.sessions
+      # persist TLS certs (a restart won't re-issue and hit Let's Encrypt limits)
+      - caddy-data:/data
       # OPTIONAL — let agents read/write your project files:
       # - ./my-project:/work
     restart: unless-stopped
 
 volumes:
   agentdeck-sessions:
+  caddy-data:
