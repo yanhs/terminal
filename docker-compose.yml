@@ -3,6 +3,11 @@ services:
     build: .
     container_name: agentdeck
     ports:
+      # Fresh VPS (nothing else on 80/443): keep these — Caddy gets automatic HTTPS for
+      # AGENTDECK_SITE and you open https://your-domain.
+      # Box already running a web server on 80/443 (so they're taken)? Change to a free port,
+      # e.g. "8765:80", set AGENTDECK_SITE=":80", and reach it at http://your-ip:8765 — or
+      # have your existing nginx proxy a subdomain to it (and do TLS there).
       - "80:80"
       - "443:443"
     environment:
