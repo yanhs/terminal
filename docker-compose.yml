@@ -3,10 +3,8 @@ services:
     build: .
     container_name: agentdeck
     ports:
-      # 127.0.0.1 = localhost ONLY. Without it Docker publishes on 0.0.0.0 and punches
-      # through ufw/the firewall, exposing this no-auth dashboard to the internet.
-      # For remote access put an authenticating proxy in front (nginx/agents-subdomain.conf).
-      - "127.0.0.1:8080:80"   # open http://localhost:8080
+      # tip: use "127.0.0.1:8080:80" to keep it local-only (Docker publishes past ufw).
+      - "8080:80"             # open http://localhost:8080
     volumes:
       # Your Claude login — REQUIRED so the agents can authenticate.
       # Run `claude` once on the host first to create ~/.claude, then:
