@@ -2,7 +2,7 @@
 # Start the whole AgentDeck stack WITHOUT Docker, in one command:
 #   1. status_server.py     — one process, all backend API ports
 #   2. one ttyd per agent    — each with the right --base-path /terminalN
-#   3. Caddy                 — login (basic auth) + optional HTTPS, on :8080
+#   3. Caddy                 — login (basic auth) + optional HTTPS, on :8765
 #
 # A LOGIN IS REQUIRED — the dashboard exposes live agent terminals. Set a password:
 #   echo 'AGENTDECK_PASSWORD=your-secret' >> .env     (or: export AGENTDECK_PASSWORD=...)
