@@ -41,10 +41,24 @@ def test_send_text_pauses_before_enter(monkeypatch):
     monkeypatch.setattr(tb, "time", FakeTime())
 
     tb.send_text("sess", "hello")
-    # order: send literal text -> sleep (>0) -> send Enter
-    assert calls[0] == ("send-keys", "-t", "sess", "-l", "hello")
-    assert calls[1][0] == "SLEEP" and calls[1][1] > 0
-    assert calls[2] == ("send-keys", "-t", "sess", "Enter")
+    # order: clear the input line (C-u) -> literal text -> sleep (>0) -> Enter
+    assert calls[0] == ("send-keys", "-t", "sess", "C-u")
+    assert calls[2] == ("send-keys", "-t", "sess", "-l", "hello")
+    assert calls[3][0] == "SLEEP" and calls[3][1] > 0
+    assert calls[4] == ("send-keys", "-t", "sess", "Enter")
+
+
+def test_send_text_clears_input_before_typing(monkeypatch):
+    # after an Esc-cancel the previous command can linger in the input box; the
+    # new text must NOT stick to it — so we wipe the line (C-u) before typing
+    calls = []
+    monkeypatch.setattr(tb, "_tmux", lambda *a: calls.append(a))
+    monkeypatch.setattr(tb, "time", type("T", (), {"sleep": lambda self, n: None})())
+    tb.send_text("sess", "next message")
+    keyseqs = [c for c in calls]
+    assert keyseqs[0] == ("send-keys", "-t", "sess", "C-u")            # clear first
+    assert keyseqs.index(("send-keys", "-t", "sess", "C-u")) < \
+        keyseqs.index(("send-keys", "-t", "sess", "-l", "next message"))
 
 
 def test_send_text_handles_cyrillic(monkeypatch):
@@ -53,7 +67,7 @@ def test_send_text_handles_cyrillic(monkeypatch):
     monkeypatch.setattr(tb, "_tmux", lambda *a: calls.append(a))
     monkeypatch.setattr(tb, "time", type("T", (), {"sleep": lambda self, n: None})())
     tb.send_text("sess", "hello, world")
-    assert calls[0] == ("send-keys", "-t", "sess", "-l", "hello, world")
+    assert ("send-keys", "-t", "sess", "-l", "hello, world") in calls
 
 
 # --- is_working -----------------------------------------------------------
@@ -301,6 +315,127 @@ def test_menu_text_marks_choice():
     assert post.count("✅") == 1 and "✅ 2. Blue" in post
 
 
+# --- built-in option filtering (Claude Code's 'Type something' / 'Chat about
+#     this instead' rows are NOT real options — never surface them as buttons) ---
+
+def _builtin_menu():
+    # mirrors a real pane: 4 agent options, then Claude Code's two built-ins
+    return {"question": "Color?",
+            "options": [(1, "🔴 Red"), (2, "🟢 Green"), (3, "🔵 Blue"),
+                        (4, "🟡 Yellow"), (5, "Type something."),
+                        (6, "Chat about this instead")],
+            "current": 1, "descs": {}}
+
+
+def test_real_options_drops_builtins():
+    real = tb._real_options(_builtin_menu())
+    assert real == [(1, "🔴 Red"), (2, "🟢 Green"), (3, "🔵 Blue"), (4, "🟡 Yellow")]
+
+
+def test_real_options_keeps_all_when_no_builtins():
+    menu = {"options": [(1, "A"), (2, "B")]}
+    assert tb._real_options(menu) == [(1, "A"), (2, "B")]
+
+
+def test_real_options_never_empty():
+    # defensive: a menu that is ONLY built-ins must not collapse to no buttons
+    menu = {"options": [(1, "Type something."), (2, "Chat about this instead")]}
+    assert tb._real_options(menu) == [(1, "Type something."), (2, "Chat about this instead")]
+
+
+def _kbd_buttons(markup):
+    return [b for row in markup.inline_keyboard for b in row]
+
+
+def test_menu_keyboard_excludes_builtins():
+    buttons = _kbd_buttons(tb._menu_keyboard("4", _builtin_menu()))
+    msel = [b.callback_data for b in buttons if b.callback_data.startswith("msel:")]
+    assert msel == ["msel:4:1", "msel:4:2", "msel:4:3", "msel:4:4"]
+    joined = " ".join(b.text for b in buttons)
+    assert "Type something" not in joined and "Chat about this" not in joined
+
+
+# --- '💬 Поговорить' button: decline the question, return to free chat --------
+
+def test_chat_option_finds_builtin():
+    assert tb._chat_option(_builtin_menu()) == 6
+
+
+def test_chat_option_none_when_absent():
+    assert tb._chat_option({"options": [(1, "A"), (2, "B")]}) is None
+
+
+def test_menu_keyboard_includes_chat_button():
+    buttons = _kbd_buttons(tb._menu_keyboard("4", _builtin_menu()))
+    chat = [b for b in buttons if b.callback_data == "mchat:4"]
+    assert len(chat) == 1 and "💬" in chat[0].text
+    assert buttons[-1].callback_data == "mchat:4"        # placed after the real options
+
+
+def test_menu_keyboard_no_chat_button_when_no_builtin():
+    menu = {"question": "Q", "options": [(1, "A"), (2, "B")], "current": 1, "descs": {}}
+    buttons = _kbd_buttons(tb._menu_keyboard("4", menu))
+    assert all(not b.callback_data.startswith("mchat:") for b in buttons)
+
+
+# --- free-text answer: 'Type something' just declines (Claude Code 2.1.183), so
+#     close the picker with Escape (robust) — NOT fragile arrow-nav -------------
+
+def test_answer_freeform_declines_with_escape_not_arrows(monkeypatch):
+    import asyncio
+    keys, texts = [], []
+    monkeypatch.setattr(tb, "send_key", lambda s, k: keys.append(k))
+    monkeypatch.setattr(tb, "send_text", lambda s, t: texts.append(t))
+    async def fake_sleep(s): pass
+    monkeypatch.setattr(tb.asyncio, "sleep", fake_sleep)
+    menu = {"options": [(1, "Red"), (2, "Green"), (3, "Type something.")], "current": 1}
+    ok = asyncio.run(tb._answer_freeform("sess", menu, "Purple"))
+    assert ok is True
+    assert keys == ["Escape"]                         # decline via Escape only
+    assert "Down" not in keys and "Up" not in keys    # no fragile arrow navigation
+    assert texts == ["Purple"]                        # then the text is typed + submitted
+
+
+def test_answer_freeform_false_without_typesomething(monkeypatch):
+    import asyncio
+    monkeypatch.setattr(tb, "send_key", lambda s, k: None)
+    monkeypatch.setattr(tb, "send_text", lambda s, t: None)
+    menu = {"options": [(1, "Red"), (2, "Blue")], "current": 1}   # no free-text row
+    assert asyncio.run(tb._answer_freeform("sess", menu, "Purple")) is False
+
+
+def test_menu_text_excludes_builtins_and_hints_freetext():
+    txt = tb._menu_text(_builtin_menu())
+    assert "Type something" not in txt and "Chat about this" not in txt
+    assert "🔴 Red" in txt and "🟡 Yellow" in txt
+    assert "✍️" in txt                                   # free-text affordance kept as a hint
+
+
+def test_menu_text_no_freetext_hint_when_no_typesomething():
+    menu = {"question": "Q?", "options": [(1, "A"), (2, "B")], "current": 1, "descs": {}}
+    assert "✍️" not in tb._menu_text(menu)
+
+
+def test_enrich_menu_relabels_real_when_pane_has_builtins(tmp_path):
+    # pane parsed 5 options (3 real + 2 built-ins); transcript has the 3 real labels.
+    # the real options get clean labels; the built-ins stay (so free-text still works).
+    f = tmp_path / "s.jsonl"
+    _write(f, [
+        {"type": "assistant", "uuid": "q1",
+         "message": {"model": "m", "content": [{"type": "tool_use", "name": "AskUserQuestion",
+             "input": {"questions": [{"question": "Pick?",
+                                      "options": [{"label": "Alpha"}, {"label": "Beta"},
+                                                  {"label": "Gamma"}]}]}}]}},
+    ])
+    menu = {"question": "trunc", "current": 1, "descs": {},
+            "options": [(1, "Alp"), (2, "Bet"), (3, "Gam"),
+                        (4, "Type something."), (5, "Chat about this instead")]}
+    out = tb.enrich_menu(menu, str(f), set())
+    assert out["question"] == "Pick?"
+    assert out["options"] == [(1, "Alpha"), (2, "Beta"), (3, "Gamma"),
+                              (4, "Type something."), (5, "Chat about this instead")]
+
+
 # --- safety: network errors swallowed; per-terminal lock ------------------
 
 def test_safe_edit_swallows_telegram_error():
@@ -321,6 +456,61 @@ def test_safe_send_swallows_and_returns_none():
         async def send_message(self, *a, **k):
             raise NetworkError("boom")
     assert asyncio.run(tb._safe_send(Bot(), 1, "hi")) is None
+
+
+# --- flood control: the FINAL reply must survive RetryAfter (waits + retries) --
+
+def test_safe_edit_retries_on_flood_then_succeeds(monkeypatch):
+    import asyncio
+    from telegram.error import RetryAfter
+    slept = []
+    async def fake_sleep(s): slept.append(s)
+    monkeypatch.setattr(tb.asyncio, "sleep", fake_sleep)
+    calls = {"n": 0}
+
+    class M:
+        async def edit_text(self, *a, **k):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RetryAfter(5)                  # flood once, then succeed
+    ok = asyncio.run(tb._safe_edit(M(), "hi", retries=2))
+    assert ok is True and calls["n"] == 2 and slept   # waited, then delivered
+
+
+def test_safe_edit_gives_up_after_retries(monkeypatch):
+    import asyncio
+    from telegram.error import RetryAfter
+    async def fake_sleep(s): pass
+    monkeypatch.setattr(tb.asyncio, "sleep", fake_sleep)
+
+    class M:
+        async def edit_text(self, *a, **k):
+            raise RetryAfter(3)                      # always flooded
+    assert asyncio.run(tb._safe_edit(M(), "hi", retries=2)) is False
+
+
+def test_safe_send_retries_on_flood(monkeypatch):
+    import asyncio
+    from telegram.error import RetryAfter
+    async def fake_sleep(s): pass
+    monkeypatch.setattr(tb.asyncio, "sleep", fake_sleep)
+    calls = {"n": 0}
+
+    class Bot:
+        async def send_message(self, *a, **k):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RetryAfter(2)
+            return "msg"
+    assert asyncio.run(tb._safe_send(Bot(), 1, "hi", retries=1)) == "msg" and calls["n"] == 2
+
+
+def test_live_edit_interval_grows_with_elapsed():
+    # spinner edits must space out as a reply runs long, so we don't rack up
+    # enough edits to a single message to trip Telegram flood control
+    early, mid, late = (tb._live_edit_interval(5), tb._live_edit_interval(90),
+                        tb._live_edit_interval(300))
+    assert early >= 3 and early < mid < late
 
 
 def test_lock_for_is_per_session():

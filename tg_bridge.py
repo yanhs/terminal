@@ -37,7 +37,7 @@ import status_server as ss  # same dir: SESSIONS, strip_ansi, is_junk
 
 from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ChatAction
-from telegram.error import TelegramError
+from telegram.error import TelegramError, RetryAfter
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
     ContextTypes, filters,
@@ -142,6 +142,11 @@ def start_session(aid: str) -> tuple[bool, str]:
 
 
 def send_text(session: str, text: str) -> None:
+    # Ctrl+U clears the input line first: after an Esc-cancel the TUI can restore
+    # the previous command into the box, and without this the new text sticks to
+    # it ("…old commandnew message"). C-u on an empty box is a harmless no-op.
+    _tmux("send-keys", "-t", session, "C-u")
+    time.sleep(0.1)
     # -l = literal (don't interpret as key names). The TUI debounces pasted
     # input, so a brief pause before Enter is REQUIRED or the Enter is swallowed
     # and the text just sits in the input box, never submitted.
@@ -185,25 +190,53 @@ def _convo(direction: str, text: str, extra: str = "") -> None:
 
 # ── safe Telegram calls (never let a transient network error kill a loop) ────
 
-async def _safe_edit(message, text: str, reply_markup=None) -> bool:
-    try:
-        await message.edit_text(text, reply_markup=reply_markup)
-        _convo("EDIT-OK", text, f"kb={'1' if reply_markup else '0'}")
-        return True
-    except TelegramError as e:
-        # "message is not modified" is benign (content unchanged); log the rest
-        _convo("EDIT-FAIL", f"{type(e).__name__}: {e}", "")
-        return False
+def _retry_after_secs(e) -> float:
+    """Seconds to wait from a RetryAfter, tolerant of PTB's upcoming switch of
+    `retry_after` from int to datetime.timedelta."""
+    ra = getattr(e, "retry_after", 0) or 0
+    return ra.total_seconds() if hasattr(ra, "total_seconds") else float(ra)
 
 
-async def _safe_send(bot, chat_id: int, text: str):
-    try:
-        m = await bot.send_message(chat_id, text)
-        _convo("SEND-OK", text, f"chat={chat_id}")
-        return m
-    except TelegramError as e:
-        _convo("SEND-FAIL", f"{type(e).__name__}: {e}", f"chat={chat_id}")
-        return None
+async def _safe_edit(message, text: str, reply_markup=None, retries: int = 0) -> bool:
+    """Edit a message, swallowing transient errors. On flood control (RetryAfter)
+    with retries>0, WAIT the requested time and retry — so the FINAL reply is
+    delivered even when a long stream tripped Telegram's edit rate limit."""
+    for attempt in range(retries + 1):
+        try:
+            await message.edit_text(text, reply_markup=reply_markup)
+            _convo("EDIT-OK", text, f"kb={'1' if reply_markup else '0'}")
+            return True
+        except RetryAfter as e:
+            _convo("EDIT-FLOOD", f"retry in {_retry_after_secs(e)}s (attempt {attempt + 1}/{retries + 1})", "")
+            if attempt < retries:
+                await asyncio.sleep(_retry_after_secs(e) + 1)
+                continue
+            return False
+        except TelegramError as e:
+            # "message is not modified" is benign (content unchanged); log the rest
+            _convo("EDIT-FAIL", f"{type(e).__name__}: {e}", "")
+            return False
+    return False
+
+
+async def _safe_send(bot, chat_id: int, text: str, retries: int = 0):
+    """Send a message, swallowing transient errors; wait+retry on flood control
+    (RetryAfter) when retries>0 so a chunked final reply isn't lost to the limit."""
+    for attempt in range(retries + 1):
+        try:
+            m = await bot.send_message(chat_id, text)
+            _convo("SEND-OK", text, f"chat={chat_id}")
+            return m
+        except RetryAfter as e:
+            _convo("SEND-FLOOD", f"retry in {_retry_after_secs(e)}s (attempt {attempt + 1}/{retries + 1})", f"chat={chat_id}")
+            if attempt < retries:
+                await asyncio.sleep(_retry_after_secs(e) + 1)
+                continue
+            return None
+        except TelegramError as e:
+            _convo("SEND-FAIL", f"{type(e).__name__}: {e}", f"chat={chat_id}")
+            return None
+    return None
 
 
 # ── stream persistence: survive a bot restart (don't freeze a half-streamed
@@ -568,30 +601,80 @@ def enrich_menu(menu: dict, path: str | None, baseline: set[str]) -> dict:
     if not aq:
         return menu
     labels = aq.get("labels") or []
+    real = _real_options(menu)
     if len(labels) == len(menu["options"]) and labels:
         menu = dict(menu)
         menu["question"] = aq.get("question") or menu["question"]
         menu["options"] = [(menu["options"][i][0], labels[i]) for i in range(len(labels))]
+    elif len(labels) == len(real) and labels:
+        # the pane also carried Claude Code's built-ins → relabel ONLY the real
+        # options with the clean transcript text; keep the built-ins untouched so
+        # free-text submission (_answer_freeform) can still find 'Type something'.
+        relabel = {real[i][0]: labels[i] for i in range(len(labels))}
+        menu = dict(menu)
+        menu["question"] = aq.get("question") or menu["question"]
+        menu["options"] = [(n, relabel.get(n, t)) for n, t in menu["options"]]
     elif aq.get("question"):
         menu = dict(menu)
         menu["question"] = aq["question"]
     return menu
 
 
+# Claude Code appends its OWN actions to every AskUserQuestion picker — 'Type
+# something' (free-text) and 'Chat about this instead'. They are NOT agent
+# options: they don't move under arrow-nav like the real ones, so a tap on them
+# wraps the cursor and mis-selects the first real option (the 'I tapped Type
+# something but it counted Red' bug). Never surface them as buttons; the user
+# answers free-text by simply typing a message (handled by _answer_freeform).
+_BUILTIN_OPTION_PREFIXES = ("type something", "chat about this")
+
+
+def _is_builtin_option(title: str) -> bool:
+    return (title or "").strip().lower().startswith(_BUILTIN_OPTION_PREFIXES)
+
+
+def _real_options(menu: dict) -> list:
+    """The agent's actual options, with Claude Code's built-in trailing actions
+    removed. Falls back to the full list if that would leave nothing."""
+    real = [(n, t) for n, t in menu["options"] if not _is_builtin_option(t)]
+    return real or list(menu["options"])
+
+
+def _has_freetext(menu: dict) -> bool:
+    """True if the picker offers Claude Code's 'Type something' free-text row —
+    then the user can answer by simply typing instead of tapping a button."""
+    return any((t or "").strip().lower().startswith("type something")
+               for _, t in menu["options"])
+
+
+def _chat_option(menu: dict) -> int | None:
+    """The option number of Claude Code's 'Chat about this instead' row, if the
+    picker has one — selecting it abandons the question and returns to free chat.
+    Surfaced as a '💬 Поговорить' button (triggered via Escape, never arrow-nav)."""
+    for n, t in menu["options"]:
+        if (t or "").strip().lower().startswith("chat about this"):
+            return n
+    return None
+
+
 def _menu_keyboard(aid: str, menu: dict) -> InlineKeyboardMarkup:
     rows = [[InlineKeyboardButton(f"{n}. {t[:48]}", callback_data=f"msel:{aid}:{n}")]
-            for n, t in menu["options"]]
+            for n, t in _real_options(menu)]
+    if _chat_option(menu) is not None:                 # Claude Code's 'Chat about this instead'
+        rows.append([InlineKeyboardButton("💬 Поговорить", callback_data=f"mchat:{aid}")])
     return InlineKeyboardMarkup(rows)
 
 
 def _menu_text(menu: dict, chosen: int | None = None) -> str:
     descs = menu.get("descs") or {}
     lines = ["📋 " + (menu["question"] or "Menu:")]
-    for num, title in menu["options"]:
+    for num, title in _real_options(menu):
         lines.append(f"{'✅' if num == chosen else '▫️'} {num}. {title}")
         d = descs.get(num)
         if d:
             lines.append(f"      ↳ {d}")          # the option's description from the screen
+    if chosen is None and _has_freetext(menu):
+        lines.append("✍️ …или просто напиши ответ текстом")
     return "\n".join(lines)[:TG_EDIT_LIMIT]
 
 
@@ -732,13 +815,26 @@ def _pane_after_input(pane: str, marker: str, n: int = 14) -> str:
     return ""
 
 
+def _live_edit_interval(elapsed: float) -> float:
+    """Seconds between live spinner edits, growing with how long the reply has
+    been streaming. A short reply updates briskly; a multi-minute one slows down
+    so it never racks up enough edits to a single message to trip Telegram's
+    flood control (which froze the counter and dropped finals before this)."""
+    if elapsed < 60:
+        return 4.0
+    if elapsed < 150:
+        return 8.0
+    return 15.0
+
+
 async def _post_final(message, text: str, aid: str) -> None:
     final = cap_reply(text) if text else "(agent finished with no text reply)"
     log.info("OUT #%s reply chars=%d preview=%r", aid, len(final), final[:160])
     parts = chunk(final) or ["(empty)"]
-    await _safe_edit(message, parts[0])
+    # retries>0: the final reply MUST land even if the stream tripped flood control
+    await _safe_edit(message, parts[0], retries=3)
     for p in parts[1:]:
-        await _safe_send(message.get_bot(), message.chat_id, p)
+        await _safe_send(message.get_bot(), message.chat_id, p, retries=3)
 
 
 async def stream_live(message, session: str, path: str | None, baseline: set[str],
@@ -750,12 +846,15 @@ async def stream_live(message, session: str, path: str | None, baseline: set[str
     never posted as the answer. Final reply = the agent's TEXT. An AskUserQuestion
     menu → inline buttons (a tap resumes via callback)."""
     loop = asyncio.get_event_loop()
-    deadline = loop.time() + timeout
-    start_deadline = loop.time() + 25
+    start = loop.time()
+    deadline = start + timeout
+    start_deadline = start + 25
     reacted = False
     last_shown = None
     last_mir = None
     settle = 0
+    last_edit_t = 0.0      # when we last refreshed the live message (edit throttle)
+    flood_until = 0.0      # don't touch the message until this time (flood back-off)
     mid = getattr(message, "message_id", None)
     cid = getattr(message, "chat_id", None)
     if mid and cid:
@@ -801,15 +900,28 @@ async def stream_live(message, session: str, path: str | None, baseline: set[str
                                           "/read — show the screen, /esc — interrupt.")
                 return
 
-            # live: mirror the terminal screen every poll (spinner shows immediately)
+            # live: mirror the terminal screen, but THROTTLE edits (interval grows
+            # with elapsed time) and back off the whole flood window on RetryAfter,
+            # so a long reply never trips Telegram's per-message edit limit (which
+            # used to freeze the counter and then drop the final reply).
+            now = loop.time()
             shown = (mir or "⏳ …")[-(TG_EDIT_LIMIT - 4):]
-            if shown != last_shown:
-                await _safe_edit(message, shown)
-                last_shown = shown
-            try:                                   # "typing…" in the chat header while it works
-                await message.get_bot().send_chat_action(message.chat_id, ChatAction.TYPING)
-            except TelegramError:
-                pass
+            if (shown != last_shown and now >= flood_until
+                    and now - last_edit_t >= _live_edit_interval(now - start)):
+                try:
+                    await message.edit_text(shown)
+                    _convo("EDIT-OK", shown, "live")
+                    last_shown = shown
+                    last_edit_t = now
+                except RetryAfter as e:
+                    flood_until = now + _retry_after_secs(e) + 1     # stop hammering until it clears
+                    _convo("EDIT-FLOOD", f"live back off {_retry_after_secs(e)}s", "")
+                except TelegramError as e:
+                    _convo("EDIT-FAIL", f"{type(e).__name__}: {e}", "live")
+                try:                               # typing… only when we actually refresh
+                    await message.get_bot().send_chat_action(message.chat_id, ChatAction.TYPING)
+                except TelegramError:
+                    pass
             await asyncio.sleep(2.5)
 
         log.info("OUT #%s TIMEOUT", aid)
@@ -939,6 +1051,38 @@ async def on_menu_select_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                           user_text="answered Claude's questions")
 
 
+async def on_menu_chat_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Tap '💬 Поговорить' → abandon the AskUserQuestion and return to free chat
+    (Claude Code's 'Chat about this instead'). Cancels the picker with Escape —
+    NOT arrow-nav — so it can never accidentally select a real option."""
+    q = update.callback_query
+    if update.effective_user.id != OWNER_ID:
+        await q.answer("no access"); return
+    aid = q.data.split(":", 1)[1]
+    session = SESSIONS.get(aid)
+    if not session or not has_session(session):
+        await q.answer("terminal unavailable"); return
+    if not parse_menu(visible(session)):
+        await q.answer("menu already closed"); return
+    await q.answer("💬")
+    path = transcript_path(aid)
+    async with lock_for(session):
+        baseline = baseline_uuids(path)      # the agent's reply to the decline = anything new
+        log.info("CHAT-DECLINE #%s (Escape)", aid)
+        send_key(session, "Escape")          # cancel the picker → agent gets a decline
+        try:
+            await q.edit_message_text("💬 Вопрос закрыт — пиши, обсудим.", reply_markup=None)
+        except TelegramError:
+            pass
+        for _ in range(8):                   # wait for the picker to clear
+            await asyncio.sleep(0.4)
+            if not parse_menu(visible(session)):
+                break
+        msg = await ctx.bot.send_message(q.message.chat_id, f"➡️ #{aid}: …")
+        await stream_live(msg, session, path, baseline, aid=aid,
+                          user_text="declined the question to chat")
+
+
 async def cmd_read(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     s = _require_session(update)
     if not s:
@@ -956,6 +1100,8 @@ async def cmd_esc(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     for _ in range(2):
         send_key(s, "Escape")
         await asyncio.sleep(0.25)
+    send_key(s, "C-u")          # the 2nd Escape restores the last command to the
+    #                             input box → clear it so the next send doesn't stick
     await update.message.reply_text("⎋ Escape ×2 (interrupt)")
 
 
@@ -986,20 +1132,17 @@ def _require_session(update: Update) -> str | None:
 
 
 async def _answer_freeform(session: str, menu: dict, text: str) -> bool:
-    """The user typed while an AskUserQuestion is open → submit their text as the
-    free-text answer via the 'Type something' option. False if there's no such
-    option (caller then just shows the buttons)."""
-    ts = next((n for n, t in menu["options"] if t.lower().startswith("type something")), None)
-    if ts is None:
+    """The user typed while an AskUserQuestion is open → deliver their text as a
+    free-text response. Verified in Claude Code 2.1.183: the 'Type something' row
+    doesn't open an answer field — it just DECLINES the question and drops to the
+    normal prompt (same as Escape). So we decline with Escape — robust, no fragile
+    arrow-nav that could land on the wrong row — then type the text as the message.
+    False when the picker has no 'Type something' row (caller shows the buttons)."""
+    if not _has_freetext(menu):
         return False
-    delta = ts - menu["current"]
-    key = "Down" if delta > 0 else "Up"
-    for _ in range(abs(delta)):
-        send_key(session, key)
-        await asyncio.sleep(0.15)
-    send_key(session, "Enter")              # open the free-text input
-    await asyncio.sleep(0.6)
-    await asyncio.to_thread(send_text, session, text)  # type the answer + submit
+    send_key(session, "Escape")             # decline the picker → normal input prompt
+    await asyncio.sleep(0.4)
+    await asyncio.to_thread(send_text, session, text)  # type the message + submit
     return True
 
 
@@ -1217,6 +1360,7 @@ def main() -> None:
     app.add_handler(CommandHandler("compact", cmd_compact, filters=owner))
     app.add_handler(CallbackQueryHandler(on_use_cb, pattern=r"^use:"))
     app.add_handler(CallbackQueryHandler(on_menu_select_cb, pattern=r"^msel:"))
+    app.add_handler(CallbackQueryHandler(on_menu_chat_cb, pattern=r"^mchat:"))
     # voice → transcribe; other media → save + link. Registered BEFORE on_text so a
     # captioned file routes to on_file (only the first matching handler in a group runs).
     app.add_handler(MessageHandler(owner & filters.VOICE, on_voice))
