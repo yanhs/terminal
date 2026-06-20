@@ -6,16 +6,17 @@ services:
       # http://<your-vps-ip>:8765 — set AGENTDECK_PORT to pick any free host port.
       - "${AGENTDECK_PORT:-8765}:8765"
     environment:
-      # REQUIRED — the dashboard login (it exposes live agent terminals):
-      AGENTDECK_PASSWORD: "${AGENTDECK_PASSWORD:?set a dashboard password in .env}"
-      AGENTDECK_USER: "${AGENTDECK_USER:-admin}"
+      # Dashboard password: set it on first visit in the browser (it exposes live
+      # terminals) — or pre-seed it here.
+      AGENTDECK_PASSWORD: "${AGENTDECK_PASSWORD:-}"
       AGENTDECK_EMAIL: "${AGENTDECK_EMAIL:-you@example.com}"
       # Default: plain http on :8765. Want a domain + automatic HTTPS? Set
       # AGENTDECK_SITE=your-domain AND change the port line above to "80:80" + "443:443".
       AGENTDECK_SITE: "${AGENTDECK_SITE:-:8765}"
     volumes:
-      # your Claude login — REQUIRED so the agents can authenticate
-      - ${HOME}/.claude:/root/.claude
+      # the agents' Claude login — stored here; sign in once in a dashboard terminal (no
+      # Claude needed on the host), and it's reused on every restart.
+      - agentdeck-claude:/root/.claude
       # keep agent conversations resumable across restarts
       - agentdeck-sessions:/app/.sessions
       # persist TLS certs if you switch to a domain (avoids Let's Encrypt rate limits)
@@ -25,5 +26,6 @@ services:
     restart: unless-stopped
 
 volumes:
+  agentdeck-claude:
   agentdeck-sessions:
   caddy-data:

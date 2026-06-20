@@ -87,17 +87,19 @@ The dashboard is responsive — here's an agent's terminal running on a phone:
 
 ## 🐳 Quick start (Docker — one command)
 
-Runs on any VPS — **no spare ports or domain needed**. You just need **Docker** and your **Claude login**.
+Runs on any VPS — **no spare ports, domain, or pre-config needed**. You just need **Docker**.
 
 ```bash
 git clone https://github.com/yanhs/agentdeck.git && cd agentdeck
-echo 'AGENTDECK_PASSWORD=change-me' >> .env     # the dashboard exposes live terminals
-docker compose up -d                            # → http://<your-vps-ip>:8765  (log in)
+docker compose up -d                            # → http://<your-vps-ip>:8765
 ```
 
-Open `http://<your-vps-ip>:8765` and log in with that password. Use a different port with
-`AGENTDECK_PORT`. Your `~/.claude` is mounted so the agents authenticate; add agents with the
-**+ Claude** button.
+Open `http://<your-vps-ip>:8765`:
+1. the **first visit asks you to set a dashboard password** (it exposes live terminals);
+2. open an agent terminal and **sign in to your Claude account once** — it's saved in a volume and reused;
+3. add agents with the **+ Claude** button; change the password later with the **Password** button.
+
+Use a different port with `AGENTDECK_PORT`.
 
 > **Want HTTPS?** Certificate authorities only issue for a **domain**, not a bare IP. Set
 > `AGENTDECK_SITE` to your domain — or, with no domain, to `<your-ip>.sslip.io` (a free wildcard
@@ -124,12 +126,11 @@ Open `http://<your-vps-ip>:8765` and log in with that password. Use a different 
 > itself (the **+ Claude** button), which writes `agents.json` for you.
 
 **One command** — with [`caddy`](https://caddyserver.com/download) on your `PATH` (a single
-binary, no sudo), set a password and run `./start.sh` — it serves the whole stack behind a
-login on **http://localhost:8765** (change the port — or set a domain for HTTPS — via `AGENTDECK_SITE`):
+binary, no sudo), `./start.sh` serves the whole stack behind a login on
+**http://localhost:8765** (you set the password on first visit; `AGENTDECK_SITE`=domain → HTTPS):
 
 ```bash
 git clone https://github.com/yanhs/agentdeck.git && cd agentdeck
-echo 'AGENTDECK_PASSWORD=change-me' >> .env
 ./start.sh
 ```
 

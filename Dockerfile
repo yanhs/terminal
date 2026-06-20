@@ -23,7 +23,9 @@ COPY --from=caddy:2 /usr/bin/caddy /usr/local/bin/caddy
 WORKDIR /app
 COPY . /app
 
-ENV AGENTDECK_WORKDIR=/work
+# IS_SANDBOX lets the agents run with --dangerously-skip-permissions inside the
+# container (claude blocks that flag as root otherwise — the container IS the sandbox).
+ENV AGENTDECK_WORKDIR=/work IS_SANDBOX=1
 RUN mkdir -p /work /app/.sessions
 
 EXPOSE 8765 80 443

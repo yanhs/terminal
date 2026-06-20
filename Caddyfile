@@ -1,57 +1,70 @@
-# Reverse proxy for `./start.sh` (no Docker). Adds a login (basic auth) in front of
-# everything, and automatic HTTPS when AGENTDECK_SITE is a domain. Mirrors the route map
-# in nginx/agents-subdomain.conf (/api/* strip the prefix; /terminalN keep it for ttyd's
-# --base-path). start.sh sets AGENTDECK_USER / AGENTDECK_PASS_HASH from your password.
+# Reverse proxy + login for `./start.sh` (no Docker). status_server manages the password:
+# you set it on first visit, and there's a Change-password page. Caddy asks /check whether
+# the session cookie is valid; if not -> redirect to /login. Set AGENTDECK_SITE to a domain
+# (or <ip>.sslip.io) for automatic HTTPS; default is plain http on :8765.
 {
 	email {$AGENTDECK_EMAIL:you@example.com}
 }
 
 {$AGENTDECK_SITE::8765} {
-	basic_auth {
-		{$AGENTDECK_USER:admin} {$AGENTDECK_PASS_HASH}
-	}
-
 	root * web
 
-	handle_path /api/terminal-status* {
-		reverse_proxy 127.0.0.1:3011
-	}
-	handle_path /api/tmux-buffer/* {
-		reverse_proxy 127.0.0.1:3045
-	}
-	handle_path /api/page-version* {
-		reverse_proxy 127.0.0.1:3014
-	}
-	handle_path /api/paste-image* {
-		reverse_proxy 127.0.0.1:3047
-	}
+	route {
+		handle /login* {
+			reverse_proxy 127.0.0.1:3046
+		}
+		handle /logout* {
+			reverse_proxy 127.0.0.1:3046
+		}
+		handle /change-password* {
+			reverse_proxy 127.0.0.1:3046
+		}
 
-	handle /terminal* {
-		reverse_proxy 127.0.0.1:3005
-	}
-	handle /terminal2* {
-		reverse_proxy 127.0.0.1:3006
-	}
-	handle /terminal3* {
-		reverse_proxy 127.0.0.1:3008
-	}
-	handle /terminal4* {
-		reverse_proxy 127.0.0.1:3009
-	}
-	handle /terminal5* {
-		reverse_proxy 127.0.0.1:3012
-	}
-	handle /terminal6* {
-		reverse_proxy 127.0.0.1:3013
-	}
-	handle /terminal7* {
-		reverse_proxy 127.0.0.1:3015
-	}
-	handle /terminal8* {
-		reverse_proxy 127.0.0.1:3016
-	}
+		forward_auth 127.0.0.1:3046 {
+			uri /check
+			@unauth status 401
+			handle_response @unauth {
+				header Location /login
+				respond 302
+			}
+		}
 
-	handle {
+		handle_path /api/terminal-status* {
+			reverse_proxy 127.0.0.1:3011
+		}
+		handle_path /api/tmux-buffer/* {
+			reverse_proxy 127.0.0.1:3045
+		}
+		handle_path /api/page-version* {
+			reverse_proxy 127.0.0.1:3014
+		}
+		handle_path /api/paste-image* {
+			reverse_proxy 127.0.0.1:3047
+		}
+		handle /terminal* {
+			reverse_proxy 127.0.0.1:3005
+		}
+		handle /terminal2* {
+			reverse_proxy 127.0.0.1:3006
+		}
+		handle /terminal3* {
+			reverse_proxy 127.0.0.1:3008
+		}
+		handle /terminal4* {
+			reverse_proxy 127.0.0.1:3009
+		}
+		handle /terminal5* {
+			reverse_proxy 127.0.0.1:3012
+		}
+		handle /terminal6* {
+			reverse_proxy 127.0.0.1:3013
+		}
+		handle /terminal7* {
+			reverse_proxy 127.0.0.1:3015
+		}
+		handle /terminal8* {
+			reverse_proxy 127.0.0.1:3016
+		}
 		file_server
 	}
 }

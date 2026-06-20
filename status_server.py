@@ -605,10 +605,46 @@ def _verify_token(tok):
     return user if hmac.compare_digest(expect, sig) else None
 
 
-def _check_password(user, pw):
-    if not re.match(r'^[A-Za-z0-9_.-]{1,32}$', user or ''):
+# Standalone/Docker mode: keep a single dashboard password (pbkdf2 hash) in a file the
+# user SETS on first run and can change in the UI. If AGENTDECK_PASSFILE is unset, behaviour
+# is unchanged (verify against /etc/nginx/.htpasswd_agents) — the live nginx setup is untouched.
+PASSFILE = os.environ.get("AGENTDECK_PASSFILE", "")
+
+
+def _pw_is_set():
+    try:
+        return bool(PASSFILE) and os.path.getsize(PASSFILE) > 0
+    except OSError:
         return False
+
+
+def _pw_store(pw):
+    salt = os.urandom(16)
+    h = hashlib.pbkdf2_hmac("sha256", pw.encode(), salt, 200_000)
+    old = os.umask(0o077)
+    try:
+        with open(PASSFILE, "w") as f:
+            f.write(f"{salt.hex()}${h.hex()}")
+    finally:
+        os.umask(old)
+
+
+def _pw_verify(pw):
+    try:
+        with open(PASSFILE) as f:
+            salt_hex, want = f.read().strip().split("$", 1)
+        h = hashlib.pbkdf2_hmac("sha256", (pw or "").encode(), bytes.fromhex(salt_hex), 200_000)
+        return hmac.compare_digest(h.hex(), want)
+    except (OSError, ValueError):
+        return False
+
+
+def _check_password(user, pw):
     if not pw or len(pw) > 256:
+        return False
+    if PASSFILE:                       # standalone mode: one password, username ignored
+        return _pw_verify(pw)
+    if not re.match(r'^[A-Za-z0-9_.-]{1,32}$', user or ''):
         return False
     try:
         r = subprocess.run(["htpasswd", "-vb", HTPASSWD_FILE, user, pw],
@@ -647,24 +683,86 @@ button:hover{background:#2ea043}
 </form></body></html>"""
 
 
-def _cookie_flags():
-    # Secure: served only over HTTPS (Cloudflare). HttpOnly: JS can't read it.
-    return "Path=/; Max-Age=%d; HttpOnly; Secure; SameSite=Lax" % AUTH_TTL
+_AUTH_HEAD = ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
+  '<meta name="viewport" content="width=device-width,initial-scale=1"><title>AgentDeck</title><style>'
+  '*{box-sizing:border-box}html,body{height:100%}'
+  'body{margin:0;display:flex;align-items:center;justify-content:center;background:#0d1117;'
+  'color:#e6edf3;font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif}'
+  '.card{width:min(92vw,340px);background:#161b22;border:1px solid #30363d;border-radius:14px;'
+  'padding:28px 26px;box-shadow:0 10px 40px rgba(0,0,0,.4)}'
+  'h1{margin:0 0 4px;font-size:19px}.sub{margin:0 0 20px;color:#8b949e;font-size:13px}'
+  'label{display:block;font-size:12px;color:#8b949e;margin:12px 0 5px}'
+  'input{width:100%;padding:10px 12px;border-radius:8px;border:1px solid #30363d;background:#0d1117;'
+  'color:#e6edf3;font-size:15px;outline:none}'
+  'input:focus{border-color:#388bfd;box-shadow:0 0 0 3px rgba(56,139,253,.25)}'
+  'button{width:100%;margin-top:18px;padding:11px;border:0;border-radius:8px;background:#238636;'
+  'color:#fff;font-size:15px;font-weight:600;cursor:pointer}button:hover{background:#2ea043}'
+  '.err{margin:14px 0 0;color:#ff7b72;font-size:13px;text-align:center}'
+  '.ok{margin:14px 0 0;color:#3fb950;font-size:13px;text-align:center}'
+  'a{color:#58a6ff}</style></head><body>')
+
+
+def _setup_form(error=""):
+    return (_AUTH_HEAD + '<form class="card" method="POST" action="/login">'
+      '<h1>🛰 AgentDeck</h1><p class="sub">Set a password to protect the dashboard</p>'
+      '<label for="p">New password</label>'
+      '<input id="p" name="pass" type="password" autocomplete="new-password" autofocus>'
+      '<label for="p2">Repeat password</label>'
+      '<input id="p2" name="pass2" type="password" autocomplete="new-password">'
+      '<button type="submit">Set password</button>'
+      + (f'<p class="err">{error}</p>' if error else '') + '</form></body></html>')
+
+
+def _change_form(error="", ok=""):
+    return (_AUTH_HEAD + '<form class="card" method="POST" action="/change-password">'
+      '<h1>Change password</h1><p class="sub">Enter your current and a new password</p>'
+      '<label for="c">Current password</label>'
+      '<input id="c" name="cur" type="password" autocomplete="current-password" autofocus>'
+      '<label for="p">New password</label>'
+      '<input id="p" name="pass" type="password" autocomplete="new-password">'
+      '<label for="p2">Repeat new password</label>'
+      '<input id="p2" name="pass2" type="password" autocomplete="new-password">'
+      '<button type="submit">Change password</button>'
+      + (f'<p class="err">{error}</p>' if error else '')
+      + (f'<p class="ok">{ok}</p>' if ok else '')
+      + '<p style="text-align:center;margin-top:14px"><a href="/">&larr; back to dashboard</a></p></form></body></html>')
+
+
+def _cookie_flags(secure=True):
+    # HttpOnly: JS can't read it. Secure (HTTPS-only) is dropped on plain http so the
+    # cookie actually comes back (e.g. a Docker http port).
+    return "Path=/; Max-Age=%d; HttpOnly; SameSite=Lax%s" % (AUTH_TTL, "; Secure" if secure else "")
 
 
 class AuthHandler(BaseHTTPRequestHandler):
-    """Cookie login service behind nginx auth_request. /check (auth probe),
-    GET /login (form), POST /login (verify→set cookie→redirect), /logout."""
+    """Cookie login. /check (auth probe), /login (form/verify; FIRST RUN in
+    AGENTDECK_PASSFILE mode = set the password), /change-password, /logout."""
 
-    def _send_login(self, error=False):
-        html = LOGIN_HTML.replace("__ERR__", '<p class="err">Invalid username or password</p>' if error else '')
+    def _secure(self):
+        return self.headers.get("X-Forwarded-Proto", "") == "https"
+
+    def _html(self, html, code=200):
         body = html.encode("utf-8")
-        self.send_response(401 if error else 200)
+        self.send_response(code)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _send_login(self, error=False):
+        if PASSFILE and not _pw_is_set():
+            return self._html(_setup_form("Passwords must match (6+ chars)" if error else ""),
+                              401 if error else 200)
+        html = LOGIN_HTML.replace("__ERR__", '<p class="err">Invalid username or password</p>' if error else '')
+        self._html(html, 401 if error else 200)
+
+    def _login_cookie(self, user):
+        tok = _sign_token(user or "admin", int(time.time()) + AUTH_TTL)
+        self.send_response(302)
+        self.send_header("Set-Cookie", f"{AUTH_COOKIE}={tok}; {_cookie_flags(self._secure())}")
+        self.send_header("Location", "/")
+        self.end_headers()
 
     def _cookies(self):
         out = {}
@@ -674,33 +772,62 @@ class AuthHandler(BaseHTTPRequestHandler):
                 out[k] = v
         return out
 
+    def _user(self):
+        return _verify_token(self._cookies().get(AUTH_COOKIE, ""))
+
+    def _redirect(self, location):
+        self.send_response(302)
+        self.send_header("Location", location)
+        self.end_headers()
+
     def do_GET(self):
         path = urlparse(self.path).path.rstrip("/") or "/"
         if path == "/check":
-            user = _verify_token(self._cookies().get(AUTH_COOKIE, ""))
-            self.send_response(200 if user else 401)
+            self.send_response(200 if self._user() else 401)
             self.end_headers()
             return
         if path == "/logout":
             self.send_response(302)
-            self.send_header("Set-Cookie", f"{AUTH_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax")
+            self.send_header("Set-Cookie", f"{AUTH_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax")
             self.send_header("Location", "/login")
             self.end_headers()
             return
+        if path == "/change-password":
+            if not (PASSFILE and self._user()):
+                return self._redirect("/login")
+            return self._html(_change_form())
         self._send_login()      # /login (or anything else) → the form
 
     def do_POST(self):
+        path = urlparse(self.path).path.rstrip("/") or "/"
         length = int(self.headers.get("Content-Length", "0") or "0")
         body = self.rfile.read(length).decode("utf-8", "replace") if 0 < length <= 4096 else ""
         form = parse_qs(body)
+
+        if path == "/change-password":
+            if not (PASSFILE and self._user()):
+                return self._redirect("/login")
+            cur = form.get("cur", [""])[0]
+            new, new2 = form.get("pass", [""])[0], form.get("pass2", [""])[0]
+            if not _pw_verify(cur):
+                return self._html(_change_form(error="Current password is wrong"))
+            if len(new) < 6 or new != new2:
+                return self._html(_change_form(error="New passwords must match (6+ chars)"))
+            _pw_store(new)
+            return self._html(_change_form(ok="Password changed."))
+
+        # /login — FIRST RUN (passfile mode, no password yet) sets it; otherwise verify
+        if PASSFILE and not _pw_is_set():
+            new, new2 = form.get("pass", [""])[0], form.get("pass2", [""])[0]
+            if len(new) < 6 or new != new2:
+                return self._html(_setup_form("Passwords must match (6+ chars)"))
+            _pw_store(new)
+            return self._login_cookie("admin")
+
         user = (form.get("user", [""])[0]).strip()
         pw = form.get("pass", [""])[0]
         if _check_password(user, pw):
-            tok = _sign_token(user, int(time.time()) + AUTH_TTL)
-            self.send_response(302)
-            self.send_header("Set-Cookie", f"{AUTH_COOKIE}={tok}; {_cookie_flags()}")
-            self.send_header("Location", "/")
-            self.end_headers()
+            self._login_cookie(user)
         else:
             self._send_login(error=True)
 
