@@ -46,9 +46,6 @@
 		handle_path /api/paste-image* {
 			reverse_proxy 127.0.0.1:3047
 		}
-		handle /terminal* {
-			reverse_proxy 127.0.0.1:3005
-		}
 		handle /terminal2* {
 			reverse_proxy 127.0.0.1:3006
 		}
@@ -69,6 +66,11 @@
 		}
 		handle /terminal8* {
 			reverse_proxy 127.0.0.1:3016
+		}
+		# /terminal* must come LAST: its wildcard also matches /terminal2../terminal8,
+		# so the specific handles above win first and this catches only terminal 1.
+		handle /terminal* {
+			reverse_proxy 127.0.0.1:3005
 		}
 		file_server
 	}
