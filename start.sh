@@ -14,6 +14,10 @@ cd "$(dirname "${BASH_SOURCE[0]:-$0}")"
 
 [ -f .env ] && { set -a; . ./.env; set +a; }
 
+# A UTF-8 locale so the tmux client renders Cyrillic / box-drawing instead of "?"
+# (respects an already-set LANG, e.g. from your shell or .env).
+export LANG="${LANG:-C.UTF-8}" LC_ALL="${LC_ALL:-C.UTF-8}"
+
 if ! command -v caddy >/dev/null 2>&1; then
   echo "[agentdeck] need 'caddy' (one binary, no sudo): https://caddyserver.com/download" >&2
   exit 1

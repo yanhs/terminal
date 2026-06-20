@@ -692,6 +692,7 @@
       if (_isMobile) enableIframeTouchScroll(f);
       if (!_isMobile) enableClipboardCopy(f);
       enablePasteImage(f);
+      suppressContextMenu(f);
       const doFocus = () => { try { f.focus(); f.contentWindow?.focus(); } catch(e) {} };
       f.addEventListener('load', doFocus);
       f.addEventListener('mousedown', doFocus);
@@ -877,6 +878,19 @@
     }
 
     /* ── Clipboard: after mouse selection in tmux, copy buffer to system clipboard ── */
+    // Right-clicking the terminal popped the browser's native context menu — newer ttyd
+    // (xterm.js 5.x client) doesn't preventDefault it the way the older client did. Quiet it
+    // on the same-origin terminal iframe (capturing listener on its document) so right-click
+    // stays out of the way, regardless of the installed ttyd version.
+    function suppressContextMenu(iframe) {
+      iframe.addEventListener('load', () => {
+        try {
+          const doc = iframe.contentDocument || iframe.contentWindow.document;
+          doc.addEventListener('contextmenu', e => e.preventDefault(), true);
+        } catch (e) { /* cross-origin (shouldn't happen) — ignore */ }
+      });
+    }
+
     function enableClipboardCopy(iframe) {
       iframe.addEventListener('load', () => {
         let attempts = 0;

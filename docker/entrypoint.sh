@@ -5,6 +5,11 @@
 set -uo pipefail
 cd /app
 
+# A UTF-8 locale so the tmux client renders Cyrillic / box-drawing instead of "?".
+# (The Dockerfile sets this as ENV too; this also covers a non-rebuilt image. ttyd runs a
+# non-login bash that sources no profile, so the locale must be a real env var on the tree.)
+export LANG="${LANG:-C.UTF-8}" LC_ALL="${LC_ALL:-C.UTF-8}"
+
 # the login password lives here (persisted in the agentdeck-sessions volume)
 export AGENTDECK_PASSFILE="${AGENTDECK_PASSFILE:-/app/.sessions/.dashpass}"
 

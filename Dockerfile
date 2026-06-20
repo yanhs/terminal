@@ -28,7 +28,9 @@ COPY . /app
 
 # IS_SANDBOX lets the agents run with --dangerously-skip-permissions inside the
 # container (claude blocks that flag as root otherwise — the container IS the sandbox).
-ENV AGENTDECK_WORKDIR=/work IS_SANDBOX=1
+# LANG/LC_ALL give a UTF-8 locale so the tmux client renders Cyrillic + box-drawing
+# instead of "?" (C.utf8 already ships in node:22-slim — no locale-gen needed).
+ENV AGENTDECK_WORKDIR=/work IS_SANDBOX=1 LANG=C.UTF-8 LC_ALL=C.UTF-8
 RUN mkdir -p /work /app/.sessions
 
 EXPOSE 8765 80 443
