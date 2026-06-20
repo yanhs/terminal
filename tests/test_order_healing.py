@@ -81,8 +81,8 @@ def test_user_removed_agents_stay_removed(tmp_path, monkeypatch):
     )
 
 
-def test_missing_order_returns_all_session_ids(tmp_path, monkeypatch):
-    """Fresh install (no _order key) → list every known session."""
+def test_missing_order_returns_first_four(tmp_path, monkeypatch):
+    """Fresh install (no _order key) → start with the first four agents."""
     mod = _load()
     agents_file = tmp_path / "agents.json"
     agents_file.write_text("{}")
@@ -92,11 +92,11 @@ def test_missing_order_returns_all_session_ids(tmp_path, monkeypatch):
         out = _do_get(mod)
 
     all_ids = [t["id"] for t in mod.SESSIONS]
-    assert out["data"]["_order"] == all_ids
+    assert out["data"]["_order"] == all_ids[:4]
 
 
-def test_empty_order_returns_all_session_ids(tmp_path, monkeypatch):
-    """An explicit empty list is treated the same as missing — show everything."""
+def test_empty_order_returns_first_four(tmp_path, monkeypatch):
+    """An explicit empty list is treated the same as missing — the first four agents."""
     mod = _load()
     agents_file = tmp_path / "agents.json"
     agents_file.write_text(json.dumps({"_order": []}))
@@ -106,7 +106,7 @@ def test_empty_order_returns_all_session_ids(tmp_path, monkeypatch):
         out = _do_get(mod)
 
     all_ids = [t["id"] for t in mod.SESSIONS]
-    assert out["data"]["_order"] == all_ids
+    assert out["data"]["_order"] == all_ids[:4]
 
 
 def test_order_with_stale_ids_is_filtered_not_extended(tmp_path, monkeypatch):
